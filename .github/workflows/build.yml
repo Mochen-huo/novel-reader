@@ -22,10 +22,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install PyInstaller PySide6 requests beautifulsoup4 lxml pywin32
           
-      - name: Build exe
+      - name: Build exe (onedir)
         run: |
-          pyinstaller --onedir --windowed --name "NovelReader" --add-data "data;data" main.py
+          pyinstaller `
+            --onedir `
+            --windowed `
+            --name "NovelReader" `
+            --add-data "data;data" `
+            --collect-all PySide6 `
+            --collect-data PySide6 `
+            --hidden-import PySide6.QtWebEngineWidgets `
+            --hidden-import PySide6.QtWebEngineCore `
+            --hidden-import PySide6.QtWebChannel `
+            --hidden-import PySide6.QtNetwork `
+            main.py
           
+      - name: List output
+        run: dir dist\NovelReader\ /s
+        
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
