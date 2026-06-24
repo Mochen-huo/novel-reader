@@ -6,8 +6,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from app.common.utils import data_dir
-
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -233,7 +231,7 @@ class VideoBrowserWidget(QWidget):
 
     def edge_profile_dir(self) -> str:
         """返回 Edge 嵌入使用的独立用户数据目录。"""
-        path = data_dir() / "edge_profile"
+        path = Path(__file__).resolve().parents[4] / "data" / "edge_profile"
         path.mkdir(parents=True, exist_ok=True)
         return str(path)
 
