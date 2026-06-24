@@ -38,9 +38,11 @@ jobs:
             main.py
           
       - name: List output
+        shell: cmd
         run: dir dist\NovelReader\ /s
         
       - name: Upload artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: NovelReader-Windows
