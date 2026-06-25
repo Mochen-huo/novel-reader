@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QThreadPool, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QPoint, QSettings, QThreadPool, Qt, QTimer
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -45,7 +46,9 @@ class MainWindow(QMainWindow):
         self.current_prev_url: str | None = None
         self.current_next_url: str | None = None
         self.reader_font_size = 18
+        self.reader_theme = "dark"
         self.focus_mode = False
+        self.settings = QSettings()
         self.reader_click_timer = QTimer(self)
         self.reader_click_timer.setSingleShot(True)
         self.reader_click_timer.timeout.connect(self.handle_reader_single_click)
@@ -61,6 +64,11 @@ class MainWindow(QMainWindow):
         self.prev_button = QPushButton("上一章")
         self.next_button = QPushButton("下一章")
         self.focus_button = QPushButton("专注")
+        self.font_down_button = QPushButton("A-")
+        self.font_up_button = QPushButton("A+")
+        self.theme_button = QPushButton("护眼")
+        self.search_input = QLineEdit()
+        self.search_button = QPushButton("查找")
         self.chapter_list = QListWidget()
         self.reader = QTextBrowser()
         self.status_title_label = QLabel("当前章节：无")
@@ -95,6 +103,12 @@ class MainWindow(QMainWindow):
         self.prev_button.setFixedWidth(80)
         self.next_button.setFixedWidth(80)
         self.focus_button.setFixedWidth(72)
+        self.font_down_button.setFixedWidth(48)
+        self.font_up_button.setFixedWidth(48)
+        self.theme_button.setFixedWidth(64)
+        self.search_input.setPlaceholderText("搜索正文")
+        self.search_input.setFixedWidth(120)
+        self.search_button.setFixedWidth(64)
 
         toolbar_layout.addWidget(self.url_label)
         toolbar_layout.addWidget(self.url_input, 1)
@@ -102,6 +116,11 @@ class MainWindow(QMainWindow):
         toolbar_layout.addWidget(self.prev_button)
         toolbar_layout.addWidget(self.next_button)
         toolbar_layout.addWidget(self.focus_button)
+        toolbar_layout.addWidget(self.font_down_button)
+        toolbar_layout.addWidget(self.font_up_button)
+        toolbar_layout.addWidget(self.theme_button)
+        toolbar_layout.addWidget(self.search_input)
+        toolbar_layout.addWidget(self.search_button)
         toolbar_layout.addWidget(self.fetch_button)
 
         content = QWidget()
@@ -148,10 +167,16 @@ class MainWindow(QMainWindow):
         self.prev_button.clicked.connect(self.fetch_prev_chapter)
         self.next_button.clicked.connect(self.fetch_next_chapter)
         self.focus_button.clicked.connect(self.toggle_focus_mode)
+        self.font_down_button.clicked.connect(lambda: self.adjust_reader_font_size(-1))
+        self.font_up_button.clicked.connect(lambda: self.adjust_reader_font_size(1))
+        self.theme_button.clicked.connect(self.toggle_reader_theme)
+        self.search_button.clicked.connect(self.search_reader_text)
+        self.search_input.returnPressed.connect(self.search_reader_text)
         self.url_input.returnPressed.connect(self.fetch_chapter)
         self.chapter_list.itemClicked.connect(self.show_saved_chapter)
         self.chapter_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.chapter_list.customContextMenuRequested.connect(self.show_chapter_context_menu)
+        self.reader.verticalScrollBar().valueChanged.connect(self.save_current_scroll_position)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
         """迷你窗口下把正文区域点击转换为翻页手势。"""
@@ -196,14 +221,20 @@ class MainWindow(QMainWindow):
         self.url_input.setVisible(url_controls_visible)
         self.clear_button.setVisible(url_controls_visible)
         self.fetch_button.setVisible(url_controls_visible)
+        self.search_input.setVisible(url_controls_visible)
+        self.search_button.setVisible(url_controls_visible)
         self.statusBar().setVisible(status_visible)
 
         self.prev_button.setText("上" if tiny_toolbar else "上一章")
         self.next_button.setText("下" if tiny_toolbar else "下一章")
         self.focus_button.setText("退" if (tiny_toolbar and self.focus_mode) else "退出" if self.focus_mode else "专" if tiny_toolbar else "专注")
+        self.theme_button.setText("绿" if (tiny_toolbar and self.reader_theme == "sepia") else "暗" if tiny_toolbar else "暗色" if self.reader_theme == "sepia" else "护眼")
         self.prev_button.setFixedWidth(46 if tiny_toolbar else 80)
         self.next_button.setFixedWidth(46 if tiny_toolbar else 80)
         self.focus_button.setFixedWidth(46 if tiny_toolbar else 72)
+        self.font_down_button.setFixedWidth(42 if tiny_toolbar else 48)
+        self.font_up_button.setFixedWidth(42 if tiny_toolbar else 48)
+        self.theme_button.setFixedWidth(42 if tiny_toolbar else 64)
         margin = 2 if mini_reader else 14
         self.content_layout.setContentsMargins(margin, margin, margin, margin)
 
@@ -407,6 +438,8 @@ class MainWindow(QMainWindow):
         </article>
         """
         self.reader.setHtml(html)
+        self.update_reader_stylesheet()
+        QTimer.singleShot(0, lambda: self.restore_chapter_scroll_position(chapter_id))
         self.update_status_bar(title, content, from_cache)
 
     def update_navigation_buttons(self) -> None:
@@ -543,15 +576,16 @@ class MainWindow(QMainWindow):
         """根据当前字号和模式刷新正文区域样式。"""
         font_size = self.calculated_reader_font_size()
         mini_reader = self.width() < self.MINI_READER_WIDTH
-        title_color = "#d4d4d4" if self.focus_mode else "#ffffff"
+        palette = self.reader_palette()
+        title_color = palette["text"] if self.focus_mode else palette["title"]
         title_size = font_size if self.focus_mode else font_size + (3 if mini_reader else 10)
         url_display = "none" if (self.focus_mode or mini_reader) else "block"
         line_height = 1.55 if mini_reader else 1.75
         self.reader.document().setDefaultStyleSheet(
             f"""
             body {{
-                background: #1e1e1e;
-                color: #d4d4d4;
+                background: {palette["background"]};
+                color: {palette["text"]};
                 font-family: Consolas, "Microsoft YaHei", "Segoe UI", sans-serif;
                 font-size: {font_size}px;
                 line-height: {line_height};
@@ -563,14 +597,26 @@ class MainWindow(QMainWindow):
                 margin-bottom: {4 if mini_reader else 12}px;
             }}
             .url {{
-                color: #858585;
+                color: {palette["muted"]};
                 display: {url_display};
                 font-size: 12px;
                 margin-bottom: 24px;
             }}
             .content {{
-                color: #d4d4d4;
+                color: {palette["text"]};
                 white-space: normal;
+            }}
+            """
+        )
+        self.reader.setStyleSheet(
+            f"""
+            QTextBrowser {{
+                background: {palette["background"]};
+                color: {palette["text"]};
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 6px;
+                selection-background-color: #264f78;
             }}
             """
         )
@@ -581,4 +627,94 @@ class MainWindow(QMainWindow):
         height = self.height()
         compact_base = min(width, int(height * 1.45))
         auto_size = 10 + round(max(0, compact_base - 360) / 120)
-        return max(self.MIN_READER_FONT_SIZE, min(self.MAX_READER_FONT_SIZE, auto_size))
+        size = round((auto_size + self.reader_font_size) / 2)
+        return max(self.MIN_READER_FONT_SIZE, min(self.MAX_READER_FONT_SIZE, size))
+
+    def adjust_reader_font_size(self, delta: int) -> None:
+        """手动调整阅读字号。"""
+        self.reader_font_size = max(
+            self.MIN_READER_FONT_SIZE,
+            min(self.MAX_READER_FONT_SIZE, self.reader_font_size + delta),
+        )
+        self.update_reader_stylesheet()
+        self.save_settings()
+
+    def toggle_reader_theme(self) -> None:
+        """切换暗色和护眼阅读主题。"""
+        self.reader_theme = "sepia" if self.reader_theme == "dark" else "dark"
+        self.theme_button.setText("暗色" if self.reader_theme == "sepia" else "护眼")
+        self.update_reader_stylesheet()
+        self.save_settings()
+
+    def reader_palette(self) -> dict[str, str]:
+        """返回当前阅读主题色。"""
+        if self.reader_theme == "sepia":
+            return {
+                "background": "#f3ead7",
+                "text": "#2f2a21",
+                "title": "#1f1a14",
+                "muted": "#7a6b55",
+            }
+        return {
+            "background": "#1e1e1e",
+            "text": "#d4d4d4",
+            "title": "#ffffff",
+            "muted": "#858585",
+        }
+
+    def search_reader_text(self) -> None:
+        """在当前正文中查找下一个关键词。"""
+        keyword = self.search_input.text().strip()
+        if not keyword:
+            return
+        if self.reader.find(keyword):
+            return
+        cursor = self.reader.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        self.reader.setTextCursor(cursor)
+        if not self.reader.find(keyword):
+            QMessageBox.information(self, "提示", f"没有找到“{keyword}”。")
+
+    def restore_settings(self) -> None:
+        """恢复阅读偏好和上次章节。"""
+        self.reader_font_size = self.settings.value("reader/font_size", 18, type=int)
+        self.reader_theme = self.settings.value("reader/theme", "dark")
+        self.theme_button.setText("暗色" if self.reader_theme == "sepia" else "护眼")
+        self.update_reader_stylesheet()
+        chapter_id = self.settings.value("reader/last_chapter_id", None)
+        if chapter_id is None:
+            return
+        chapter = self.service.get_chapter(int(chapter_id))
+        if chapter is not None:
+            self.refresh_chapter_list(selected_id=chapter.id)
+            self.display_chapter(
+                chapter_id=chapter.id,
+                title=chapter.title,
+                url=chapter.url,
+                content=chapter.content,
+                from_cache=True,
+                prev_url=chapter.prev_url,
+                next_url=chapter.next_url,
+            )
+
+    def save_settings(self) -> None:
+        """保存阅读偏好和当前阅读位置。"""
+        self.settings.setValue("reader/font_size", self.reader_font_size)
+        self.settings.setValue("reader/theme", self.reader_theme)
+        if self.current_chapter_id is not None:
+            self.settings.setValue("reader/last_chapter_id", self.current_chapter_id)
+            self.save_current_scroll_position()
+
+    def save_current_scroll_position(self, _value: int | None = None) -> None:
+        """保存当前章节的滚动条位置。"""
+        if self.current_chapter_id is None:
+            return
+        self.settings.setValue(
+            f"reader/chapter_scroll/{self.current_chapter_id}",
+            self.reader.verticalScrollBar().value(),
+        )
+
+    def restore_chapter_scroll_position(self, chapter_id: int) -> None:
+        """恢复指定章节的滚动条位置。"""
+        value = self.settings.value(f"reader/chapter_scroll/{chapter_id}", 0, type=int)
+        self.reader.verticalScrollBar().setValue(value)

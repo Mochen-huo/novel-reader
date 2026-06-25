@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 
 def project_root() -> Path:
     """返回项目根目录，便于跨平台拼接路径。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[2]
 
 
